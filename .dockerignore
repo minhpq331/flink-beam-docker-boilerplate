@@ -1,5 +1,4 @@
 # Maven
-target/
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup
@@ -26,3 +25,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Git
+.git/
+.gitignore
+README.md
+LICENSE

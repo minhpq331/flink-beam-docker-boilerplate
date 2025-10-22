@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+      - "9101:9101"
+    environment:
+      # KRaft mode configuration (no Zookeeper needed)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      
+      # Log retention settings
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      
+      # JMX settings
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      
+      # KRaft specific settings
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: Mx7d3vO8SFi8QF4y4i4Lmg
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  akhq:
+    image: tchiotludo/akhq:0.25.0
+    container_name: akhq
+    depends_on:
+      - kafka
+    ports:
+      - "8086:8080"
+    environment:
+      AKHQ_CONFIGURATION: |
+        akhq:
+          connections:
+            kafka-cluster:
+              properties:
+                bootstrap.servers: "kafka:9092"
+
+  flink-jobmanager:
+    image: flink:1.19-java17
+    container_name: flink-jobmanager
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        parallelism.default: 1
+        jobmanager.memory.process.size: 1600m
+        taskmanager.memory.process.size: 1728m
+    ports:
+      - "8081:8081"
+    volumes:
+      - flink-data:/opt/flink
+
+  flink-taskmanager:
+    image: flink:1.19-java17
+    container_name: flink-taskmanager
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        parallelism.default: 1
+        jobmanager.memory.process.size: 1600m
+        taskmanager.memory.process.size: 1728m
+    volumes:
+      - flink-data:/opt/flink
+
+  beam-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: beam-app
+    depends_on:
+      - kafka
+      - flink-jobmanager
+      - flink-taskmanager
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - FLINK_JOB_MANAGER=flink-jobmanager:8081
+      - INPUT_TOPIC=test
+      - OUTPUT_TOPIC=user-count-output
+    volumes:
+      - ./target:/app/target
+      - flink-data:/opt/flink
+    command: >
+      sh -c "
+      echo 'Submitting Beam job to Flink...' &&
+      java -cp /app/target/flink-beam-kafka-boilerplate-1.0.0.jar:/opt/flink/lib/*
+      com.example.beam.UserEventProcessor
+      --kafkaBootstrapServers=kafka:9092
+      --inputTopic=test
+      --outputTopic=user-count-output
+      --runner=FlinkRunner
+      --flinkMaster=flink-jobmanager:8081
+      "
+
+volumes:
+  kafka-data:
+  flink-data:
